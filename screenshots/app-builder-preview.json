@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "TAKE FIVE",
+      "hasCanvas": false,
+      "bodyTextLen": 377,
+      "bodyTextHash": "a2de841f630d8d012426186081983095e6b932434662a948f2e4570ef8b6282d",
+      "bodyTextPrefix": "TAKE FIVE 해커톤 시연 스튜디오 01 찍기 / 02 대본 / 03 목소리 / 04 내보내기 5분이면 끝납니다",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "TAKE FIVE",
+      "hasCanvas": false,
+      "bodyTextLen": 359,
+      "bodyTextHash": "5bf19d5e03119a04e7990f945f2a0ceae1957e9f7e37b6042a8721f624932983",
+      "bodyTextPrefix": "TAKE FIVE 01 찍기 02 대본 03 목소리 04 내보내기 5분이면 끝납니다 화면을 찍거나, 영상을 올리거나",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
