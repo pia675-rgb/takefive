@@ -30,9 +30,10 @@ import {
   stitchCueAudio,
 } from "@/lib/studio/media";
 import { useStudio } from "@/lib/studio/store";
-import { formatTimecode, packCues } from "@/lib/studio/time";
+import { formatTimecode, isPauseCue, packCues } from "@/lib/studio/time";
 import type { VideoPaneHandle } from "./video-pane";
 import { AutoCaptionButton, CaptionList } from "./caption-tools";
+import { IntroSilence } from "./intro-silence";
 
 interface VoiceStageProps {
   player: RefObject<VideoPaneHandle | null>;
@@ -50,6 +51,8 @@ export function VoiceStage({ player, nowMs, aiOn }: VoiceStageProps) {
   const hasNarration = useStudio((s) => s.hasNarration);
   const narrationKind = useStudio((s) => s.narrationKind);
   const durationMs = useStudio((s) => s.durationMs);
+  const introMs = useStudio((s) => s.introMs);
+  const setIntroMs = useStudio((s) => s.setIntroMs);
   const setStep = useStudio((s) => s.setStep);
 
   const [tab, setTab] = useState<"ai" | "mic">(
@@ -122,11 +125,12 @@ export function VoiceStage({ player, nowMs, aiOn }: VoiceStageProps) {
     setBusy("나레이션을 만드는 중");
     setProgress(0);
     try {
-      const packed = packCues(lines, durationMs);
+      const packed = packCues(cues, durationMs, 160, introMs);
       retimeCues(packed);
+      const spoken = packed.filter((c) => c.text.trim() && !isPauseCue(c));
       const parts: { startMs: number; blob: Blob }[] = [];
-      for (let i = 0; i < packed.length; i++) {
-        const cue = packed[i]!;
+      for (let i = 0; i < spoken.length; i++) {
+        const cue = spoken[i]!;
         const res = await synthesizeSpeech({
           data: {
             text: cue.text,
@@ -139,15 +143,16 @@ export function VoiceStage({ player, nowMs, aiOn }: VoiceStageProps) {
           startMs: cue.startMs,
           blob: base64ToBlob(res.base64, res.mime),
         });
-        setProgress(((i + 1) / packed.length) * 100);
+        setProgress(((i + 1) / spoken.length) * 100);
       }
       const { blob: stitched, startsMs } = await stitchCueAudio(parts, durationMs);
       const dur = await audioDurationMs(stitched);
       retimeCues(
-        packed.map((c, i) => ({
-          ...c,
-          startMs: startsMs[i] ?? c.startMs,
-        })),
+        packed.map((c) => {
+          if (isPauseCue(c) || !c.text.trim()) return c;
+          const idx = spoken.findIndex((s) => s.id === c.id);
+          return { ...c, startMs: startsMs[idx] ?? c.startMs };
+        }),
       );
       await applyNarration(stitched, "ai", dur);
       toast.success("AI 나레이션을 입혔습니다");
@@ -266,9 +271,11 @@ export function VoiceStage({ player, nowMs, aiOn }: VoiceStageProps) {
           나레이션을 입힙니다
         </h2>
         <p className="text-sm text-muted-foreground">
-          AI 목소리로 생성하거나, 영상을 보며 직접 읽습니다.
+          오프닝 무음만큼 쉬고 나서 말이 시작됩니다. AI로 입히거나 직접 읽으세요.
         </p>
       </header>
+
+      <IntroSilence value={introMs} onChange={setIntroMs} />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as "ai" | "mic")}>
         <TabsList className="w-full">
@@ -389,7 +396,8 @@ export function VoiceStage({ player, nowMs, aiOn }: VoiceStageProps) {
             </div>
           )}
           <p className="text-xs text-muted-foreground">
-            텔레프롬프터가 현재 줄을 보여 줍니다. 리허설은 녹화하지 않습니다.
+            텔레프롬프터가 현재 줄을 보여 줍니다. 오프닝 무음이 있으면 그 시간만큼
+            기다렸다가 읽으세요. 리허설은 녹화하지 않습니다.
           </p>
         </TabsContent>
       </Tabs>

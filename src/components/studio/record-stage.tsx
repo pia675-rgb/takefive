@@ -46,6 +46,8 @@ export function RecordStage({ liveHost }: RecordStageProps) {
   const durationMs = useStudio((s) => s.durationMs);
   const limitMs = useStudio((s) => s.limitMs);
   const resetAll = useStudio((s) => s.resetAll);
+  const videoMissing = useStudio((s) => s.videoMissing);
+  const cues = useStudio((s) => s.cues);
 
   const [withMic, setWithMic] = useState(true);
   const [withFace, setWithFace] = useState(true);
@@ -191,6 +193,13 @@ export function RecordStage({ liveHost }: RecordStageProps) {
         </p>
       </header>
 
+      {videoMissing && (
+        <p className="rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
+          영상이 비었습니다. 대본 {cues.filter((c) => c.text.trim()).length}줄은
+          남아 있습니다. 영상을 다시 올리면 이어서 할 수 있습니다.
+        </p>
+      )}
+
       {recording ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between rounded-lg bg-secondary px-4 py-3">
@@ -334,6 +343,13 @@ export function RecordStage({ liveHost }: RecordStageProps) {
               <Button
                 variant="outline"
                 onClick={() => {
+                  if (
+                    !window.confirm(
+                      "클립과 대본, 목소리를 모두 지우고 처음부터 할까요?",
+                    )
+                  ) {
+                    return;
+                  }
                   void resetAll();
                   toast("처음부터 다시 시작합니다");
                 }}

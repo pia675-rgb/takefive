@@ -1,7 +1,17 @@
-let videoBlob: Blob | null = null;
-let videoUrl: string | null = null;
-let narrationBlob: Blob | null = null;
-let narrationUrl: string | null = null;
+type MediaMem = {
+  videoBlob: Blob | null;
+  videoUrl: string | null;
+  narrationBlob: Blob | null;
+  narrationUrl: string | null;
+};
+
+const g = globalThis as typeof globalThis & { __takeFiveMedia?: MediaMem };
+const mem: MediaMem = (g.__takeFiveMedia ??= {
+  videoBlob: null,
+  videoUrl: null,
+  narrationBlob: null,
+  narrationUrl: null,
+});
 
 function swapUrl(prev: string | null, blob: Blob | null): string | null {
   if (prev) URL.revokeObjectURL(prev);
@@ -9,30 +19,31 @@ function swapUrl(prev: string | null, blob: Blob | null): string | null {
 }
 
 export function setVideoBlob(blob: Blob | null) {
-  videoBlob = blob;
-  videoUrl = swapUrl(videoUrl, blob);
+  mem.videoBlob = blob;
+  mem.videoUrl = swapUrl(mem.videoUrl, blob);
 }
 
 export function getVideoBlob() {
-  return videoBlob;
+  return mem.videoBlob;
 }
 
 export function getVideoUrl() {
-  return videoUrl;
+  return mem.videoUrl;
 }
 
 export function setNarrationBlob(blob: Blob | null) {
-  narrationBlob = blob;
-  narrationUrl = swapUrl(narrationUrl, blob);
+  mem.narrationBlob = blob;
+  mem.narrationUrl = swapUrl(mem.narrationUrl, blob);
 }
 
 export function getNarrationBlob() {
-  return narrationBlob;
+  return mem.narrationBlob;
 }
 
 export function getNarrationUrl() {
-  return narrationUrl;
+  return mem.narrationUrl;
 }
+
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|ogv|3gp)$/i;
 

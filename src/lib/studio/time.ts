@@ -28,6 +28,18 @@ export function estimateSpeechMs(text: string): number {
   return (chars / 6.2) * 1000;
 }
 
+export function isPauseCue(cue: Cue) {
+  return cue.kind === "pause";
+}
+
+export function cueSpanMs(cue: Cue): number {
+  if (isPauseCue(cue)) {
+    if (cue.endMs && cue.endMs > cue.startMs) return cue.endMs - cue.startMs;
+    return 1000;
+  }
+  return Math.max(400, estimateSpeechMs(cue.text));
+}
+
 export function cueWindows(cues: Cue[], durationMs: number) {
   const sorted = [...cues].sort((a, b) => a.startMs - b.startMs);
   return sorted.map((cue, i) => {
@@ -39,17 +51,25 @@ export function cueWindows(cues: Cue[], durationMs: number) {
   });
 }
 
-export function packCues(cues: Cue[], durationMs: number, gapMs = 160): Cue[] {
+export function packCues(
+  cues: Cue[],
+  durationMs: number,
+  gapMs = 160,
+  leadMs = 0,
+): Cue[] {
   const sorted = [...cues]
-    .filter((c) => c.text.trim())
+    .filter((c) => c.text.trim() || isPauseCue(c))
     .sort((a, b) => a.startMs - b.startMs);
-  let t = 0;
+  const lead = Math.max(0, leadMs);
+  let t = lead;
   return sorted.map((c) => {
-    const spoken = Math.max(400, estimateSpeechMs(c.text));
-    const startMs = Math.max(0, Math.max(c.startMs, t));
+    const pause = isPauseCue(c);
+    const spoken = cueSpanMs(c);
+    const floor = pause ? 0 : lead;
+    const startMs = Math.max(floor, Math.max(c.startMs, t));
     const endMs = startMs + spoken;
-    t = endMs + gapMs;
-    return { ...c, startMs, endMs };
+    t = endMs + (pause ? 0 : gapMs);
+    return { ...c, startMs, endMs, text: pause ? "" : c.text, kind: pause ? "pause" : c.kind };
   });
 }
 
@@ -85,9 +105,9 @@ export function downloadBlob(blob: Blob, filename: string) {
   }, 1500);
 }
 
-
 export function cuesToSrt(cues: Cue[], durationMs: number): string {
   return cueWindows(cues, durationMs)
+    .filter((c) => c.text.trim())
     .map((c, i) => {
       return `${i + 1}\n${formatSrtTime(c.startMs)} --> ${formatSrtTime(c.endMs)}\n${c.text.trim()}\n`;
     })

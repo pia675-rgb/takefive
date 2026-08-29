@@ -1,14 +1,10 @@
 import type { Cue } from "./types";
-import { packCues } from "./time";
+import { fitCuesToDuration } from "./script-fit";
 
 const MAX_CUES = 40;
 const MAX_LINE = 400;
 
-export function parseScriptFile(
-  filename: string,
-  raw: string,
-  durationMs: number,
-): Cue[] {
+export function parseScriptSource(filename: string, raw: string): Cue[] {
   const text = raw.replace(/^\uFEFF/, "").trim();
   if (!text) throw new Error("빈 파일입니다");
   const lower = filename.toLowerCase();
@@ -21,11 +17,22 @@ export function parseScriptFile(
     cues = timed.length ? timed : parseParagraphs(text);
   }
   cues = cues
-    .map((c) => ({ ...c, text: c.text.replace(/\s+/g, " ").trim().slice(0, MAX_LINE) }))
+    .map((c) => ({
+      ...c,
+      text: c.text.replace(/\s+/g, " ").trim().slice(0, MAX_LINE),
+    }))
     .filter((c) => c.text.length > 0)
     .slice(0, MAX_CUES);
   if (!cues.length) throw new Error("읽을 줄이 없습니다");
-  return packCues(cues, durationMs);
+  return cues;
+}
+
+export function parseScriptFile(
+  filename: string,
+  raw: string,
+  durationMs: number,
+): Cue[] {
+  return fitCuesToDuration(parseScriptSource(filename, raw), durationMs);
 }
 
 function looksSrt(text: string) {

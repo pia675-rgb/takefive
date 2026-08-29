@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { getAiStatus } from "@/lib/ai/studio-ai";
 import { STEPS, type StepId } from "@/lib/studio/types";
-import { narrationSrc, useStudio, videoSrc } from "@/lib/studio/store";
+import { narrationSrc, bootStudio, useStudio, videoSrc } from "@/lib/studio/store";
 import { cn } from "@/lib/utils";
 import { VideoPane, type VideoPaneHandle } from "./video-pane";
 import { RecordStage } from "./record-stage";
@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 
 export function StudioApp() {
   const hydrated = useStudio((s) => s.hydrated);
-  const hydrate = useStudio((s) => s.hydrate);
+  const videoMissing = useStudio((s) => s.videoMissing);
   const step = useStudio((s) => s.step);
   const setStep = useStudio((s) => s.setStep);
   const hasVideo = useStudio((s) => s.hasVideo);
@@ -31,8 +31,8 @@ export function StudioApp() {
   const liveHost = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void hydrate();
-  }, [hydrate]);
+    void bootStudio();
+  }, []);
 
   useEffect(() => {
     void getAiStatus()
@@ -41,8 +41,12 @@ export function StudioApp() {
   }, []);
 
   useEffect(() => {
-    if (hydrated && !hasVideo && step !== "record") setStep("record");
-  }, [hydrated, hasVideo, step, setStep]);
+    if (!hydrated) return;
+    if (hasVideo || videoMissing) return;
+    if (step !== "record" && !cues.some((c) => c.text.trim()) && durationMs === 0) {
+      setStep("record");
+    }
+  }, [hydrated, hasVideo, videoMissing, step, setStep, cues, durationMs]);
 
   const src = hasVideo ? videoSrc() : null;
   const nSrc = hasNarration ? narrationSrc() : null;
@@ -58,7 +62,7 @@ export function StudioApp() {
         </div>
         <nav className="flex flex-1 items-center gap-1 overflow-x-auto sm:justify-center">
           {STEPS.map((s, i) => {
-            const locked = s.id !== "record" && !hasVideo;
+            const locked = s.id !== "record" && !hasVideo && !videoMissing;
             const active = s.id === step;
             return (
               <button
@@ -100,6 +104,12 @@ export function StudioApp() {
 
       <main className="mx-auto grid w-full max-w-7xl flex-1 grid-cols-1 gap-6 p-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] lg:p-6">
         <section className="min-w-0">
+          {videoMissing && (
+            <p className="mb-3 rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
+              영상이 이 창에서 사라졌습니다. 대본은 그대로입니다. 찍기에서 영상을
+              다시 올려 주세요.
+            </p>
+          )}
           <div className="relative">
             <VideoPane
               key={mediaRev}

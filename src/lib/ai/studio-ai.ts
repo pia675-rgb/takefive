@@ -21,6 +21,12 @@ const sttSchema = z.object({
   mime: z.string().max(80),
 });
 
+const refitSchema = z.object({
+  source: z.string().min(1).max(12_000),
+  durationSec: z.number().min(3).max(420),
+  title: z.string().max(80).optional(),
+});
+
 export const getAiStatus = createServerFn({ method: "GET" }).handler(
   async () => {
     return { available: Boolean(process.env.XAI_API_KEY) };
@@ -58,33 +64,76 @@ ${toneLine}
 - JSON만 출력. 키: cues: [{ startSec: number, text: string }]
 - 마크다운 펜스 금지.`;
 
-    const res = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "grok-4.5",
-        max_tokens: 1800,
-        temperature: 0.6,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    if (!res.ok) {
-      return { ok: false as const, error: `대본 생성 실패 (${res.status})` };
-    }
-    const body = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const text = body.choices?.[0]?.message?.content ?? "";
-    try {
-      const parsed = parseCues(text, data.durationSec);
-      return { ok: true as const, cues: parsed };
-    } catch {
-      return { ok: false as const, error: "대본 형식을 읽지 못했습니다. 다시 시도해 주세요." };
-    }
+    return completeCues(apiKey, prompt, data.durationSec);
   });
+
+export const refitScript = createServerFn({ method: "POST" })
+  .validator(refitSchema)
+  .handler(async ({ data }) => {
+    const apiKey = process.env.XAI_API_KEY;
+    if (!apiKey) return { ok: false as const, error: "AI를 사용할 수 없습니다" };
+
+    const sec = Math.round(data.durationSec);
+    const targetChars = Math.max(40, Math.round(sec * 5.4));
+    const cueMin = sec < 20 ? 2 : sec < 45 ? 3 : 4;
+    const cueMax = sec < 15 ? 4 : sec < 40 ? 6 : sec < 90 ? 8 : sec < 180 ? 10 : 12;
+    const source = data.source.slice(0, 8000);
+
+    const prompt = `업로드된 나레이션 대본을 영상 길이에 맞게 다시 짜라. 원문을 그대로 읽지 마라.
+
+작품: ${data.title || "시연"}
+영상 길이: ${sec}초
+말할 총량: 공백 제외 약 ${targetChars}자. 이보다 길면 반드시 줄여라. 짧으면 억지로 늘리지 마라.
+큐 개수: ${cueMin}~${cueMax}개. 첫 큐 0초, 마지막 큐는 영상이 끝나기 전에 말이 끝나게.
+
+원본 대본:
+"""
+${source}
+"""
+
+규칙:
+- 핵심 주장, 제품명, 수치, 데모 순서는 유지.
+- 군더더기·반복·사회자 멘트는 빼라.
+- 한국어 구어체. 한 큐 1~3문장.
+- 원본 타임코드가 영상보다 길면 버리고, 0~${sec}초 안에 다시 배치.
+- 말이 서로 겹치지 않게 시작 시각을 떨어뜨려라.
+- JSON만 출력. 키: cues: [{ startSec: number, text: string }]
+- 마크다운 펜스 금지.`;
+
+    return completeCues(apiKey, prompt, data.durationSec);
+  });
+
+async function completeCues(apiKey: string, prompt: string, durationSec: number) {
+  const res = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "grok-4.5",
+      max_tokens: 1800,
+      temperature: 0.45,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    return { ok: false as const, error: `대본 생성 실패 (${res.status})` };
+  }
+  const body = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const text = body.choices?.[0]?.message?.content ?? "";
+  try {
+    const parsed = parseCues(text, durationSec);
+    return { ok: true as const, cues: parsed };
+  } catch {
+    return {
+      ok: false as const,
+      error: "대본 형식을 읽지 못했습니다. 다시 시도해 주세요.",
+    };
+  }
+}
 
 export const synthesizeSpeech = createServerFn({ method: "POST" })
   .validator(ttsSchema)
@@ -190,6 +239,5 @@ function parseCues(raw: string, durationSec: number) {
     }));
   if (!cues.length) throw new Error("empty");
   cues.sort((a, b) => a.startSec - b.startSec);
-  cues[0]!.startSec = 0;
   return cues;
 }

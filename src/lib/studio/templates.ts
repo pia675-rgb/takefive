@@ -32,19 +32,29 @@ export const SAMPLE_BRIEF: Brief = {
   tone: "plain",
 };
 
+export const SAMPLE_LINES = [
+  "화면을 먼저 찍고, 말은 나중에.",
+  "설명 영상이 늘 급합니다.",
+  "녹화부터 내보내기까지, 한곳에서.",
+  "AI로 입히거나 직접 읽습니다.",
+] as const;
+
 export function sampleCues(durationMs: number): Cue[] {
-  const lines = [
-    "화면을 먼저 찍고, 말은 나중에.",
-    "설명 영상이 늘 급합니다.",
-    "녹화부터 내보내기까지, 한곳에서.",
-    "AI로 입히거나 직접 읽습니다.",
-  ];
-  const cues = lines.map((text, i) => ({
+  const cues = SAMPLE_LINES.map((text, i) => ({
     id: id(),
-    startMs: Math.round((durationMs * i) / lines.length),
+    startMs: Math.round((durationMs * i) / SAMPLE_LINES.length),
     text,
   }));
   return packCues(cues, durationMs);
+}
+
+export function hasCustomCues(cues: Cue[]): boolean {
+  const lines = cues.map((c) => c.text.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  if (lines.length === SAMPLE_LINES.length && lines.every((t, i) => t === SAMPLE_LINES[i])) {
+    return false;
+  }
+  return true;
 }
 
 export const TONE_LABEL: Record<Brief["tone"], string> = {

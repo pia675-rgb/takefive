@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode, type RefObject } from "react";
-import { Plus, Sparkles, Trash2, Upload, Wand2 } from "lucide-react";
+import { Pause, Plus, Sparkles, TimerReset, Trash2, Upload, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,12 +14,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { generateScript } from "@/lib/ai/studio-ai";
-import { parseScriptFile } from "@/lib/studio/script-file";
+import { generateScript, refitScript } from "@/lib/ai/studio-ai";
+import { parseScriptSource } from "@/lib/studio/script-file";
+import { aiCuesToStudio, fitCuesToDuration, formatSourceForAi } from "@/lib/studio/script-fit";
 import { useStudio } from "@/lib/studio/store";
 import { hackathonBeats } from "@/lib/studio/templates";
-import { estimateSpeechMs, formatTimecode, overlappingCueIds, packCues } from "@/lib/studio/time";
+import { estimateSpeechMs, formatTimecode, overlappingCueIds, packCues, isPauseCue, cueSpanMs } from "@/lib/studio/time";
 import { AutoCaptionButton, CaptionList } from "./caption-tools";
+import { IntroSilence } from "./intro-silence";
+import type { Cue } from "@/lib/studio/types";
 import type { VideoPaneHandle } from "./video-pane";
 
 interface ScriptStageProps {
@@ -42,9 +45,12 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
   const removeCue = useStudio((s) => s.removeCue);
   const setStep = useStudio((s) => s.setStep);
   const title = useStudio((s) => s.title);
+  const introMs = useStudio((s) => s.introMs);
+  const setIntroMs = useStudio((s) => s.setIntroMs);
+  const addPause = useStudio((s) => s.addPause);
 
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const spoken = useMemo(
     () => cues.reduce((n, c) => n + estimateSpeechMs(c.text), 0),
@@ -54,8 +60,12 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
   const clashes = useMemo(() => overlappingCueIds(cues), [cues]);
 
   const fillTemplate = () => {
-    setCues(packCues(hackathonBeats(durationMs), durationMs));
+    setCues(packCues(hackathonBeats(durationMs), durationMs, 160, introMs));
     toast("5분 피치 뼈대를 넣었습니다. 문장만 바꾸면 됩니다.");
+  };
+
+  const applyAiCues = (rows: { startSec: number; text: string }[]) => {
+    setCues(aiCuesToStudio(rows, durationMs, introMs));
   };
 
   const onUpload = async (file: File | undefined) => {
@@ -64,18 +74,60 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
       toast.error("txt, srt, vtt 파일만 올릴 수 있습니다");
       return;
     }
+    setBusy("맞추는 중");
     try {
       const raw = await file.text();
-      const next = parseScriptFile(file.name, raw, durationMs);
-      setCues(next);
-      toast.success(`대본 ${next.length}줄을 올렸습니다`);
+      const parsed = parseScriptSource(file.name, raw);
+      const fitted = await refitToVideo(parsed);
+      setCues(fitted);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "대본을 읽지 못했습니다");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const refitToVideo = async (sourceCues: Cue[]) => {
+    const durationSec = Math.max(3, durationMs / 1000);
+    if (aiOn) {
+      const res = await refitScript({
+        data: {
+          source: formatSourceForAi(sourceCues),
+          durationSec,
+          title,
+        },
+      });
+      if (res.ok) {
+        toast.success(
+          `영상 ${formatTimecode(durationMs)}에 맞춰 ${res.cues.length}줄로 다시 짰습니다`,
+        );
+        return aiCuesToStudio(res.cues, durationMs, introMs);
+      }
+      toast.message("AI 없이 길이에 맞춰 배치했습니다");
+    } else {
+      toast.message("AI 없이 길이에 맞춰 배치했습니다");
+    }
+    return fitCuesToDuration(sourceCues, durationMs, introMs);
+  };
+
+  const refitCurrent = async () => {
+    const source = cues.filter((c) => c.text.trim());
+    if (!source.length) {
+      toast.error("맞출 대본이 없습니다");
+      return;
+    }
+    setBusy("맞추는 중");
+    try {
+      setCues(await refitToVideo(source));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "다시 짜지 못했습니다");
+    } finally {
+      setBusy(null);
     }
   };
 
   const generate = async () => {
-    setBusy(true);
+    setBusy("쓰는 중");
     try {
       const res = await generateScript({
         data: {
@@ -88,22 +140,15 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
         toast.error(res.error);
         return;
       }
-      setCues(
-        packCues(
-          res.cues.map((c) => ({
-            id: crypto.randomUUID(),
-            startMs: Math.round(c.startSec * 1000),
-            text: c.text,
-          })),
-          durationMs,
-        ),
-      );
+      applyAiCues(res.cues);
       setOpen(false);
-      toast.success("대본을 썼습니다. 타임코드를 만져 화면과 맞추세요.");
+      toast.success(
+        `영상 ${formatTimecode(durationMs)}에 맞춰 대본을 썼습니다`,
+      );
     } catch {
       toast.error("대본 생성에 실패했습니다");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -117,7 +162,7 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
           화면에 맞춰 말을 적습니다
         </h2>
         <p className="text-sm text-muted-foreground">
-          줄을 누르면 그 시각으로 이동합니다. txt·srt·vtt 대본을 올릴 수 있습니다.
+          올린 대본은 그대로 읽지 않고, 영상 길이에 맞춰 다시 짭니다.
         </p>
       </header>
 
@@ -134,12 +179,13 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
           <Wand2 />
           5분 뼈대
         </Button>
-        <Button size="sm" variant="outline" asChild>
+        <Button size="sm" variant="outline" asChild disabled={Boolean(busy)}>
           <label className="cursor-pointer">
             <input
               type="file"
               accept={SCRIPT_ACCEPT}
               className="sr-only"
+              disabled={Boolean(busy)}
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 e.target.value = "";
@@ -147,20 +193,49 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
               }}
             />
             <Upload />
-            대본 올리기
+            {busy === "맞추는 중" ? "맞추는 중…" : "대본 올리기"}
           </label>
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={!aiOn}
+          disabled={Boolean(busy) || !cues.some((c) => c.text.trim())}
+          onClick={() => void refitCurrent()}
+        >
+          <TimerReset />
+          길이에 맞추기
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!aiOn || Boolean(busy)}
           onClick={() => setOpen(true)}
         >
           <Sparkles />
           AI로 쓰기
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={Boolean(busy)}
+          onClick={() => {
+            if (nowMs <= introMs + 80) {
+              const next = Math.min(3000, introMs + 500);
+              setIntroMs(next);
+              toast(`오프닝 무음 ${next / 1000}초`);
+              return;
+            }
+            addPause(nowMs, 1000);
+            toast("1초 쉼을 넣었습니다");
+          }}
+        >
+          <Pause />
+          쉼 넣기
+        </Button>
         <AutoCaptionButton preferNarration={false} />
       </div>
+
+      <IntroSilence value={introMs} onChange={setIntroMs} />
 
       <CaptionList nowMs={nowMs} />
 
@@ -171,6 +246,7 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
         )}
       >
         예상 발화 {formatTimecode(spoken)} / 영상 {formatTimecode(durationMs)}
+        {introMs > 0 ? ` · 앞 ${introMs / 1000}초 무음` : ""}
         {over ? " · 조금 줄여 주세요" : ""}
         {clashes.size ? " · 말이 겹칩니다" : ""}
       </p>
@@ -197,6 +273,8 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
           const active =
             nowMs >= cue.startMs &&
             nowMs < (cues[i + 1]?.startMs ?? durationMs);
+          const pause = isPauseCue(cue);
+          const span = cueSpanMs(cue);
           return (
             <li
               key={cue.id}
@@ -215,27 +293,83 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
                   {formatTimecode(cue.startMs)}
                 </button>
                 <span className="text-xs text-muted-foreground">
-                  {formatTimecode(estimateSpeechMs(cue.text))}
+                  {pause ? "무음" : formatTimecode(estimateSpeechMs(cue.text))}
                 </span>
-                <button
-                  type="button"
-                  className="ml-auto rounded-sm p-1.5 text-muted-foreground transition-[background-color,color] duration-150 hover:bg-secondary hover:text-foreground"
-                  onClick={() => removeCue(cue.id)}
-                  aria-label="줄 삭제"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                <div className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="rounded-sm px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    onClick={() =>
+                      updateCue(cue.id, {
+                        startMs: Math.max(pause ? 0 : introMs, cue.startMs - 500),
+                      })
+                    }
+                  >
+                    −0.5
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-sm px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    onClick={() =>
+                      updateCue(cue.id, {
+                        startMs: Math.min(durationMs - 400, cue.startMs + 500),
+                      })
+                    }
+                  >
+                    +0.5
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-sm p-1.5 text-muted-foreground transition-[background-color,color] duration-150 hover:bg-secondary hover:text-foreground"
+                    onClick={() => removeCue(cue.id)}
+                    aria-label="줄 삭제"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               </div>
               {clashes.has(cue.id) && (
                 <p className="mb-2 text-xs text-rec">다음 줄과 말이 겹칩니다</p>
               )}
-              <Textarea
-                value={cue.text}
-                rows={3}
-                placeholder="이 장면에서 할 말"
-                onChange={(e) => updateCue(cue.id, { text: e.target.value })}
-                onFocus={() => player.current?.seek(cue.startMs)}
-              />
+              {pause ? (
+                <div className="flex items-center justify-between gap-2 rounded-md bg-secondary px-3 py-2">
+                  <span className="text-sm text-muted-foreground">
+                    {span / 1000}초 쉼
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        const next = Math.max(300, span - 500);
+                        updateCue(cue.id, { endMs: cue.startMs + next });
+                        packSpeech();
+                      }}
+                    >
+                      −
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        const next = Math.min(8000, span + 500);
+                        updateCue(cue.id, { endMs: cue.startMs + next });
+                        packSpeech();
+                      }}
+                    >
+                      +
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Textarea
+                  value={cue.text}
+                  rows={3}
+                  placeholder="이 장면에서 할 말"
+                  onChange={(e) => updateCue(cue.id, { text: e.target.value })}
+                  onFocus={() => player.current?.seek(cue.startMs)}
+                />
+              )}
             </li>
           );
         })}
@@ -318,8 +452,8 @@ export function ScriptStage({ nowMs, player, aiOn }: ScriptStageProps) {
             <Button variant="outline" onClick={() => setOpen(false)}>
               닫기
             </Button>
-            <Button disabled={busy} onClick={() => void generate()}>
-              {busy ? "쓰는 중…" : "대본 받기"}
+            <Button disabled={Boolean(busy)} onClick={() => void generate()}>
+              {busy === "쓰는 중" ? "쓰는 중…" : "대본 받기"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -4,13 +4,15 @@ import type { Brief, CaptionSource, Cue, Mixer, StepId, VoiceKind } from "./type
 import { DEFAULT_VOICE_ID, LIMIT_MS } from "./types";
 import { idbClear, idbDel, idbGet, idbSet } from "./idb";
 import {
+  getNarrationBlob,
   getNarrationUrl,
+  getVideoBlob,
   getVideoUrl,
   setNarrationBlob,
   setVideoBlob,
   videoDurationMs,
 } from "./media";
-import { sampleCues } from "./templates";
+import { hasCustomCues, sampleCues } from "./templates";
 import { packCues } from "./time";
 
 export interface StudioState {
@@ -18,6 +20,7 @@ export interface StudioState {
   step: StepId;
   title: string;
   hasVideo: boolean;
+  videoMissing: boolean;
   durationMs: number;
   trimStartMs: number;
   trimEndMs: number;
@@ -33,6 +36,7 @@ export interface StudioState {
   narrationDurationMs: number;
   mixer: Mixer;
   mediaRev: number;
+  introMs: number;
   hydrate: () => Promise<void>;
   setStep: (step: StepId) => void;
   setTitle: (title: string) => void;
@@ -41,6 +45,8 @@ export interface StudioState {
   retimeCues: (cues: Cue[]) => void;
   packSpeech: () => void;
   addCue: (atMs: number, text?: string) => void;
+  addPause: (atMs: number, durMs?: number) => void;
+  setIntroMs: (ms: number) => void;
   updateCue: (id: string, patch: Partial<Cue>) => void;
   removeCue: (id: string) => void;
   setCaptions: (captions: Cue[], source: CaptionSource | null) => void;
@@ -77,6 +83,7 @@ export const useStudio = create<StudioState>()(
       step: "record",
       title: "해커톤 시연",
       hasVideo: false,
+      videoMissing: false,
       durationMs: 0,
       trimStartMs: 0,
       trimEndMs: 0,
@@ -92,10 +99,12 @@ export const useStudio = create<StudioState>()(
       narrationDurationMs: 0,
       mixer: defaultMixer,
       mediaRev: 0,
+      introMs: 1000,
 
       hydrate: async () => {
         try {
-          const video = await idbGet("video");
+          let video = getVideoBlob();
+          if (!video) video = (await idbGet("video")) ?? null;
           if (video) {
             setVideoBlob(video);
             let duration = get().durationMs;
@@ -104,11 +113,16 @@ export const useStudio = create<StudioState>()(
             }
             set({
               hasVideo: true,
+              videoMissing: false,
               durationMs: duration,
               trimEndMs: get().trimEndMs || duration,
             });
+          } else if (get().hasVideo || get().durationMs > 0 || hasCustomCues(get().cues)) {
+            set({ videoMissing: true, hasVideo: false });
           }
-          const narration = await idbGet("narration");
+
+          let narration = getNarrationBlob();
+          if (!narration) narration = (await idbGet("narration")) ?? null;
           if (narration) {
             setNarrationBlob(narration);
             set({ hasNarration: true });
@@ -121,11 +135,19 @@ export const useStudio = create<StudioState>()(
       setStep: (step) => set({ step }),
       setTitle: (title) => set({ title }),
       setBrief: (patch) => set({ brief: { ...get().brief, ...patch } }),
-      setCues: (cues) => set({ cues, captions: [], captionSource: null }),
+      setCues: (cues) => set({ cues }),
       retimeCues: (cues) => set({ cues }),
       packSpeech: () => {
+        const { cues, durationMs, introMs } = get();
+        set({ cues: packCues(cues, durationMs, 160, introMs) });
+      },
+      setIntroMs: (ms) => {
+        const introMs = Math.max(0, Math.min(8_000, Math.round(ms)));
         const { cues, durationMs } = get();
-        set({ cues: packCues(cues, durationMs) });
+        set({
+          introMs,
+          cues: cues.length ? packCues(cues, durationMs, 160, introMs) : cues,
+        });
       },
       addCue: (atMs, text) => {
         const cue: Cue = {
@@ -134,6 +156,21 @@ export const useStudio = create<StudioState>()(
           text: text ?? "",
         };
         set({ cues: [...get().cues, cue].sort((a, b) => a.startMs - b.startMs) });
+      },
+      addPause: (atMs, durMs = 1000) => {
+        const span = Math.max(300, Math.min(8_000, durMs));
+        const startMs = Math.max(0, Math.round(atMs));
+        const cue: Cue = {
+          id: crypto.randomUUID(),
+          startMs,
+          endMs: startMs + span,
+          text: "",
+          kind: "pause",
+        };
+        const { durationMs, introMs } = get();
+        set({
+          cues: packCues([...get().cues, cue], durationMs, 160, introMs),
+        });
       },
       updateCue: (id, patch) => {
         set({
@@ -177,34 +214,41 @@ export const useStudio = create<StudioState>()(
           duration = durationHintMs;
         }
         const limit = get().limitMs;
+        const clipped = Math.min(duration, limit);
         setVideoBlob(blob);
-        await idbSet("video", blob);
+        const saved = await idbSet("video", blob);
         setNarrationBlob(null);
         await idbDel("narration");
-        const nextTitle = name
-          ? name.replace(/\.[^.]+$/, "")
-          : get().title;
-        const prevDur = get().durationMs;
         const sample = Boolean(name && /샘플/.test(name));
-        const cues =
-          sample || !get().cues.length || prevDur === 0
-            ? sampleCues(Math.min(duration, limit))
-            : packCues(get().cues, Math.min(duration, limit));
+        const keep = hasCustomCues(get().cues);
+        const cues = keep
+          ? packCues(get().cues, clipped, 160, get().introMs)
+          : sample
+            ? packCues(sampleCues(clipped), clipped, 160, get().introMs)
+            : get().cues;
+        const nextTitle =
+          !get().title || get().title === "해커톤 시연"
+            ? name
+              ? name.replace(/\.[^.]+$/, "")
+              : get().title
+            : get().title;
         set({
           hasVideo: true,
+          videoMissing: false,
           durationMs: duration,
           trimStartMs: 0,
-          trimEndMs: Math.min(duration, limit),
+          trimEndMs: clipped,
           title: nextTitle,
           cues,
-          captions: [],
-          captionSource: null,
           hasNarration: false,
           narrationKind: null,
           narrationDurationMs: 0,
-          step: "script",
+          step: get().step === "record" ? "script" : get().step,
           mediaRev: get().mediaRev + 1,
         });
+        if (!saved) {
+          console.warn("take-five: video was not persisted to IndexedDB");
+        }
       },
 
       applyNarration: async (blob, kind, durationMs) => {
@@ -215,7 +259,7 @@ export const useStudio = create<StudioState>()(
           narrationKind: kind,
           narrationDurationMs: durationMs,
           mediaRev: get().mediaRev + 1,
-          step: "export",
+          step: get().step === "voice" ? "export" : get().step,
         });
       },
 
@@ -238,6 +282,7 @@ export const useStudio = create<StudioState>()(
           step: "record",
           title: "해커톤 시연",
           hasVideo: false,
+          videoMissing: false,
           durationMs: 0,
           trimStartMs: 0,
           trimEndMs: 0,
@@ -249,15 +294,18 @@ export const useStudio = create<StudioState>()(
           narrationKind: null,
           narrationDurationMs: 0,
           mixer: defaultMixer,
+          introMs: 1000,
           mediaRev: get().mediaRev + 1,
         });
       },
     }),
     {
       name: "take-five-studio",
+      skipHydration: true,
       partialize: (s) => ({
         step: s.step,
         title: s.title,
+        hasVideo: s.hasVideo,
         durationMs: s.durationMs,
         trimStartMs: s.trimStartMs,
         trimEndMs: s.trimEndMs,
@@ -267,12 +315,25 @@ export const useStudio = create<StudioState>()(
         brief: s.brief,
         voiceId: s.voiceId,
         voiceSpeed: s.voiceSpeed,
+        introMs: s.introMs,
+        hasNarration: s.hasNarration,
         narrationKind: s.narrationKind,
         mixer: s.mixer,
       }),
     },
   ),
 );
+
+let persistReady: Promise<void> | null = null;
+
+export function bootStudio() {
+  if (!persistReady) {
+    persistReady = Promise.resolve(useStudio.persist.rehydrate()).then(
+      () => undefined,
+    );
+  }
+  return persistReady.then(() => useStudio.getState().hydrate());
+}
 
 export function videoSrc() {
   return getVideoUrl();

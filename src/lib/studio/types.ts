@@ -11,6 +11,7 @@ export interface Cue {
   startMs: number;
   endMs?: number;
   text: string;
+  kind?: "line" | "pause";
 }
 
 export interface Mixer {
