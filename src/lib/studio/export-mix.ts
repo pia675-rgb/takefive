@@ -69,8 +69,8 @@ async function mixRealtime(opts: MixOptions): Promise<Blob> {
   const srcW = video.videoWidth || 1280;
   const srcH = video.videoHeight || 720;
   const scale = Math.min(1, 1280 / srcW);
-  canvas.width = Math.round(srcW * scale) || 1280;
-  canvas.height = Math.round(srcH * scale) || 720;
+  canvas.width = even(Math.round(srcW * scale) || 1280);
+  canvas.height = even(Math.round(srcH * scale) || 720);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("캔버스를 만들 수 없습니다");
 
@@ -114,7 +114,13 @@ async function mixRealtime(opts: MixOptions): Promise<Blob> {
       const tMs = video.currentTime * 1000;
       const cue = windows.find((c) => tMs >= c.startMs && tMs < c.endMs);
       if (cue?.text) drawSubtitle(ctx, canvas.width, canvas.height, cue.text);
-      requestAnimationFrame(loop);
+      const rvfc = (
+        video as HTMLVideoElement & {
+          requestVideoFrameCallback?: (cb: () => void) => number;
+        }
+      ).requestVideoFrameCallback;
+      if (typeof rvfc === "function") rvfc.call(video, loop);
+      else requestAnimationFrame(loop);
     };
     loop();
     videoStream = canvas.captureStream(30);
@@ -160,19 +166,19 @@ async function mixRealtime(opts: MixOptions): Promise<Blob> {
         if (recorder.state === "recording") recorder.stop();
       }
     };
-    video.addEventListener("timeupdate", onTime);
-    video.onended = () => {
-      video.removeEventListener("timeupdate", onTime);
-      if (recorder.state === "recording") recorder.stop();
-    };
 
-    recorder.start(200);
     const play = async () => {
       try {
         await video.play();
         await nEl?.play();
+        if (recorder.state === "inactive") recorder.start(250);
+        video.addEventListener("timeupdate", onTime);
+        video.onended = () => {
+          video.removeEventListener("timeupdate", onTime);
+          if (recorder.state === "recording") recorder.stop();
+        };
       } catch (err) {
-        recorder.stop();
+        if (recorder.state === "recording") recorder.stop();
         reject(err instanceof Error ? err : new Error("재생을 시작하지 못했습니다"));
       }
     };
@@ -184,6 +190,7 @@ async function mixRealtime(opts: MixOptions): Promise<Blob> {
   nEl?.pause();
   await audioCtx.close().catch(() => undefined);
   URL.revokeObjectURL(vUrl);
+  if (nEl?.src) URL.revokeObjectURL(nEl.src);
   mixed.getTracks().forEach((t) => t.stop());
   return blob;
 }
@@ -263,6 +270,10 @@ function roundFill(
   ctx.fill();
 }
 
+function even(n: number) {
+  return n - (n % 2);
+}
+
 function waitLoaded(video: HTMLVideoElement): Promise<void> {
   return new Promise((resolve, reject) => {
     if (video.readyState >= 2) {
@@ -293,8 +304,12 @@ function loadAudio(blob: Blob): Promise<HTMLAudioElement> {
   return new Promise((resolve, reject) => {
     const el = document.createElement("audio");
     el.preload = "auto";
-    el.src = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    el.src = url;
     el.onloadeddata = () => resolve(el);
-    el.onerror = () => reject(new Error("나레이션을 불러오지 못했습니다"));
+    el.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("나레이션을 불러오지 못했습니다"));
+    };
   });
 }

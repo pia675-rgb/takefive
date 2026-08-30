@@ -126,6 +126,8 @@ export const useStudio = create<StudioState>()(
           if (narration) {
             setNarrationBlob(narration);
             set({ hasNarration: true });
+          } else if (get().hasNarration) {
+            set({ hasNarration: false, narrationKind: null });
           }
         } finally {
           set((s) => ({ hydrated: true, mediaRev: s.mediaRev + 1 }));
@@ -135,7 +137,7 @@ export const useStudio = create<StudioState>()(
       setStep: (step) => set({ step }),
       setTitle: (title) => set({ title }),
       setBrief: (patch) => set({ brief: { ...get().brief, ...patch } }),
-      setCues: (cues) => set({ cues }),
+      setCues: (cues) => set({ cues, captions: [], captionSource: null }),
       retimeCues: (cues) => set({ cues }),
       packSpeech: () => {
         const { cues, durationMs, introMs } = get();

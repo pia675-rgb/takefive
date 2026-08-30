@@ -90,21 +90,27 @@ export function RecordStage({ liveHost }: RecordStageProps) {
         return;
       }
 
-      for (let n = 3; n >= 1; n--) {
-        setCountdown(n);
-        await sleep(700);
-      }
-      setCountdown(null);
+      const countdown = async () => {
+        for (let n = 3; n >= 1; n--) {
+          setCountdown(n);
+          await sleep(700);
+        }
+        setCountdown(null);
+      };
 
       const faceOn = mode === "pip" || (mode === "screen" && withFace);
       const handle =
         mode === "camera"
-          ? await startCameraRecord(withMic)
+          ? await (async () => {
+              await countdown();
+              return startCameraRecord(withMic);
+            })()
           : await startScreenRecord({
               withMic,
               pip: faceOn ? pip : "off",
               pipShape,
               pipSize,
+              beforeStart: countdown,
               onShareEnded: () => void finish(),
             });
       handleRef.current = handle;
@@ -273,7 +279,7 @@ export function RecordStage({ liveHost }: RecordStageProps) {
             </div>
             <p className="text-xs text-muted-foreground">
               유튜브 라이브처럼 화면 한쪽에 촬영자 얼굴을 겹칩니다. 끌 수도
-              있습니다.
+              있습니다. 얼굴을 켜면 해상도를 조금 낮춰 끊김을 줄입니다.
             </p>
             {withFace && (
               <>

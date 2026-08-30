@@ -53,20 +53,27 @@ export function isLikelyVideoFile(file: File): boolean {
   return VIDEO_EXT.test(file.name);
 }
 
-export function pickRecorderMime(kind: "video" | "audio"): string | undefined {
-
+export function pickRecorderMime(
+  kind: "video" | "audio",
+  prefer: "mp4" | "webm" = "mp4",
+): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
+  const videoMp4 = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=avc1.4d001f,mp4a.40.2",
+    "video/mp4",
+  ];
+  const videoWebm = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ];
   const candidates =
     kind === "video"
-      ? [
-          "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-          "video/mp4;codecs=avc1.4d001f,mp4a.40.2",
-          "video/mp4",
-          "video/webm;codecs=vp9,opus",
-          "video/webm;codecs=vp8,opus",
-          "video/webm",
-        ]
-      : ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/aac"];
+      ? prefer === "webm"
+        ? [...videoWebm, ...videoMp4]
+        : [...videoMp4, ...videoWebm]
+      : ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"];
   return candidates.find((c) => MediaRecorder.isTypeSupported(c));
 }
 
@@ -82,7 +89,7 @@ export function videoDurationMs(blob: Blob): Promise<number> {
       URL.revokeObjectURL(url);
       resolve(Math.max(0, ms));
     };
-    const timer = window.setTimeout(() => done(0), 1500);
+    const timer = window.setTimeout(() => done(0), 4000);
     el.onloadedmetadata = () => {
       if (Number.isFinite(el.duration) && el.duration > 0) {
         window.clearTimeout(timer);

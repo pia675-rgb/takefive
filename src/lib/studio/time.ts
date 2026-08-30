@@ -66,7 +66,10 @@ export function packCues(
     const pause = isPauseCue(c);
     const spoken = cueSpanMs(c);
     const floor = pause ? 0 : lead;
-    const startMs = Math.max(floor, Math.max(c.startMs, t));
+    const startMs = Math.min(
+      Math.max(floor, Math.max(c.startMs, t)),
+      Math.max(0, durationMs - 400),
+    );
     const endMs = startMs + spoken;
     t = endMs + (pause ? 0 : gapMs);
     return { ...c, startMs, endMs, text: pause ? "" : c.text, kind: pause ? "pause" : c.kind };
